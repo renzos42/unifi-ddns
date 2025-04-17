@@ -35,11 +35,16 @@ function constructClientOptions(request: Request): ClientOptions {
 function constructDNSRecord(request: Request): AddressableRecord {
 	const url = new URL(request.url);
 	const params = url.searchParams;
-	const ip = params.get('ip');
+	let ip = params.get('ip') || params.get('myip');
 	const hostname = params.get('hostname');
 
 	if (ip === null || ip === undefined) {
-		throw new HttpError(422, 'The "ip" parameter is required and cannot be empty.');
+		throw new HttpError(422, 'The "ip" parameter is required and cannot be empty. Specify ip=auto to use the client IP.');
+	} else if (ip == 'auto') {
+		ip = request.headers.get('CF-Connecting-IP');
+		if (ip === null) {
+			throw new HttpError(500, 'Request asked for ip=auto but client IP address cannot be determined.');
+		}
 	}
 
 	if (hostname === null || hostname === undefined) {
@@ -74,7 +79,7 @@ async function update(clientOptions: ClientOptions, newRecord: AddressableRecord
 	const records = (
 		await cloudflare.dns.records.list({
 			zone_id: zone.id,
-			name: newRecord.name,
+			name: newRecord.name as any,
 			type: newRecord.type,
 		})
 	).result;
@@ -85,31 +90,30 @@ async function update(clientOptions: ClientOptions, newRecord: AddressableRecord
 		throw new HttpError(400, 'No record found! You must first manually create the record.');
 	}
 
-	// Extract the current `proxied` status
+	// Extract current properties
 	const currentRecord = records[0] as AddressableRecord;
 	const proxied = currentRecord.proxied ?? false; // Default to `false` if `proxied` is undefined
+	const comment = currentRecord.comment;
 
 	await cloudflare.dns.records.update(records[0].id, {
 		content: newRecord.content,
 		zone_id: zone.id,
-		name: newRecord.name,
+		name: newRecord.name as any,
 		type: newRecord.type,
 		proxied, // Pass the existing "proxied" status
+		comment, // Pass the existing "comment"
 	});
 
-	console.log('DNS record for ' + newRecord.name + '(' + newRecord.type +') updated successfully to ' + newRecord.content);
+	console.log('DNS record for ' + newRecord.name + '(' + newRecord.type + ') updated successfully to ' + newRecord.content);
 
 	return new Response('OK', { status: 200 });
 }
 
 export default {
 	async fetch(request): Promise<Response> {
-		const url = new URL(request.url);
 		console.log('Requester IP: ' + request.headers.get('CF-Connecting-IP'));
 		console.log(request.method + ': ' + request.url);
-		if (request.body) {
-			console.log('Body: ' + await request.text());
-		}
+		console.log('Body: ' + (await request.text()));
 
 		try {
 			// Construct client options and DNS record
